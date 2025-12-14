@@ -16,16 +16,11 @@ import './style.css';
 
 // Controls wiring (moved below UI elements)
 
-window.addEventListener('resize', () => { generateLevel(); draw(); });
-
-// init
-resizeCanvas();
-generateLevel();
-resetGame();
-
 // UI elements
 const startBtn = document.getElementById('start') as HTMLButtonElement | null;
-const landBtn = document.getElementById('land') as HTMLButtonElement | null;
+// land button removed: auto-landing implemented
+const landBtn = null as unknown as HTMLButtonElement | null;
+const fullscreenBtn = document.getElementById('fullscreen') as HTMLButtonElement | null;
 const resetBtn = document.getElementById('reset') as HTMLButtonElement | null;
 const cashoutBtn = document.getElementById('cashout') as HTMLButtonElement | null;
 const multiplierEl = document.getElementById('multiplier') as HTMLElement | null;
@@ -114,7 +109,6 @@ function resetGame() {
   statusEl && (statusEl.textContent = 'Ожидание');
   cashoutBtn && (cashoutBtn.disabled = true);
   startBtn && (startBtn.disabled = false);
-  landBtn && (landBtn.disabled = false);
   generateLevel();
   draw();
 }
@@ -127,6 +121,7 @@ function randomCrash() {
 function startRound() {
   if (running) return;
   crashAt = randomCrash();
+  console.log('game: startRound crashAt=', crashAt);
   running = true;
   crashed = false;
   lastTime = performance.now();
@@ -154,6 +149,8 @@ function cashout() {
 function doLand() {
   if (!running) return;
   // plane must be above carrier area and vertical speed slow
+  landingTried = false;
+  console.log('game: startRound crashAt=', crashAt);
   const puX = planeX;
   if (puX > carrier.x - 10 && puX < carrier.x + carrier.w + 10 && Math.abs(planeVY) < 200) {
     running = false;
@@ -167,6 +164,10 @@ function doLand() {
     statusEl && (statusEl.textContent = 'Не получилось приземлиться');
   }
 }
+
+// landing state for current pass
+let landingTried = false;
+
 
 function loop(now: number) {
   const dt = (now - lastTime) / 1000;
@@ -232,6 +233,41 @@ function loop(now: number) {
     if (planeX > cw + 80) {
       planeX = -40;
     }
+
+    // check passing over carrier to attempt auto-landing
+    if (!landingTried && planeX >= carrier.x - 10 && planeX <= carrier.x + carrier.w + 10) {
+      landingTried = true;
+      // landing chance decreases with higher multiplier (more risk)
+      const baseChance = 0.65; // base chance to land
+      const penalty = clamp((multiplier - 1) / 6, 0, 0.5); // more multiplier reduces chance
+      const chance = clamp(baseChance - penalty, 0.05, 0.95);
+      console.log('game: landing attempt chance=', chance.toFixed(2));
+      if (Math.random() < chance && Math.abs(planeVY) < 500) {
+        // successful landing — plane aligns to deck
+        running = false;
+        const reward = Math.round(multiplier * 30);
+        score += reward;
+        scoreEl && (scoreEl.textContent = String(score));
+        statusEl && (statusEl.textContent = `Приземление успешно! +${reward}`);
+        cashoutBtn && (cashoutBtn.disabled = true);
+        startBtn && (startBtn.disabled = false);
+        // move plane down onto deck
+        planeY = carrier.y - 8;
+        planeVY = 0;
+      } else {
+        // failed — falls into water and multiplier is lost
+        crashed = true;
+        running = false;
+        multiplier = 1.0;
+        multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
+        statusEl && (statusEl.textContent = 'Самолёт упал в воду — множитель сброшен');
+        cashoutBtn && (cashoutBtn.disabled = true);
+        startBtn && (startBtn.disabled = false);
+        // visually send plane to water
+        planeY = canvas.clientHeight - 12;
+        planeVY = 800;
+      }
+    }
   }
 
   draw();
@@ -256,10 +292,19 @@ function draw() {
   ctx.fillRect(0, ch - 28, cw, 28);
 
   // draw carrier
-  ctx.fillStyle = '#2b2b2b';
+  // draw carrier (runway + deck markings)
+  ctx.fillStyle = '#3a3a3a';
   ctx.fillRect(carrier.x, carrier.y, carrier.w, carrier.h);
+  // deck stripe
   ctx.fillStyle = '#d5d8dc';
-  ctx.fillRect(carrier.x + 10, carrier.y + 6, 60, 12);
+  ctx.fillRect(carrier.x + 12, carrier.y + 6, carrier.w - 24, 6);
+  // center runway line
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(carrier.x + carrier.w / 2, carrier.y + 4);
+  ctx.lineTo(carrier.x + carrier.w / 2, carrier.y + carrier.h - 4);
+  ctx.stroke();
 
   // draw bonuses
   for (const b of bonuses) {
@@ -300,15 +345,37 @@ function draw() {
   ctx.save();
   ctx.translate(planeX, planeY);
   ctx.rotate(planeAngle);
-  ctx.fillStyle = '#ffd400';
+  // more detailed plane: body, wings, tail
+  // body
+  ctx.fillStyle = '#e6e6e6';
   ctx.beginPath();
-  ctx.ellipse(0, 0, 14, 6, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, 18, 7, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#ff8f00';
+  // cockpit
+  ctx.fillStyle = '#2b4b66';
+  ctx.fillRect(4, -4, 6, 6);
+  // wings
+  ctx.fillStyle = '#cfcfcf';
   ctx.beginPath();
-  ctx.moveTo(-6, 0);
-  ctx.lineTo(10, -6);
-  ctx.lineTo(10, 6);
+  ctx.moveTo(-4, 2);
+  ctx.lineTo(10, 14);
+  ctx.lineTo(12, 12);
+  ctx.lineTo(-4, -2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-4, -2);
+  ctx.lineTo(12, -14);
+  ctx.lineTo(10, -12);
+  ctx.lineTo(-4, 2);
+  ctx.closePath();
+  ctx.fill();
+  // tail
+  ctx.fillStyle = '#aab7c2';
+  ctx.beginPath();
+  ctx.moveTo(-14, -3);
+  ctx.lineTo(-20, -9);
+  ctx.lineTo(-20, 9);
   ctx.closePath();
   ctx.fill();
   ctx.restore();
@@ -340,7 +407,14 @@ function draw() {
 })();
 
 // Controls wiring
-startBtn?.addEventListener('click', () => { resetGame(); startRound(); });
+startBtn?.addEventListener('click', () => { console.log('game: start clicked'); resetGame(); startRound(); });
+fullscreenBtn?.addEventListener('click', () => {
+  if (!document.fullscreenElement) {
+    canvas.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+});
 landBtn?.addEventListener('click', () => { doLand(); });
 resetBtn?.addEventListener('click', () => { resetGame(); });
 cashoutBtn?.addEventListener('click', () => { cashout(); });
@@ -349,10 +423,13 @@ window.addEventListener('keydown', (e) => { if (e.code === 'Space') isUp = true;
 window.addEventListener('keyup', (e) => { if (e.code === 'Space') isUp = false; });
 window.addEventListener('mousedown', () => isUp = true);
 window.addEventListener('mouseup', () => isUp = false);
+// toggle fullscreen with 'F'
+window.addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'f') { if (!document.fullscreenElement) canvas.requestFullscreen().catch(()=>{}); else document.exitFullscreen().catch(()=>{}); } });
 
 window.addEventListener('resize', () => { generateLevel(); draw(); });
 
-// init
+// final init (after UI elements and handlers are attached)
+console.log('game: module ready');
 resizeCanvas();
 generateLevel();
 resetGame();
