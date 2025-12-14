@@ -34,6 +34,7 @@ const ctx = canvas.getContext('2d')!;
 // Game state
 let running = false;
 let crashed = false;
+let falling = false;
 let multiplier = 1.0;
 let score = 0;
 let lastTime = 0;
@@ -215,7 +216,23 @@ function loop(now: number) {
     const minY = 24;
     const maxY = canvas.clientHeight - 24;
     if (planeY < minY) { planeY = minY; planeVY = 0; }
-    if (planeY > maxY) { planeY = maxY; planeVY = 0; }
+    if (planeY > maxY) {
+      if (falling) {
+        // crashed into water after falling
+        crashed = true;
+        running = false;
+        falling = false;
+        multiplier = 1.0;
+        multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
+        statusEl && (statusEl.textContent = 'Упал в воду — конец раунда');
+        cashoutBtn && (cashoutBtn.disabled = true);
+        startBtn && (startBtn.disabled = false);
+        planeY = maxY;
+        planeVY = 0;
+      } else {
+        planeY = maxY; planeVY = 0;
+      }
+    }
 
     // check collisions with rockets
     for (const r of rockets) {
@@ -223,13 +240,12 @@ function loop(now: number) {
       const dx = planeX - r.x; const dy = planeY - r.y;
       const rr = r.r + 10;
       if (dx * dx + dy * dy < rr * rr) {
-        // crash!
-        crashed = true;
-        running = false;
+        // hit by rocket: start falling but don't stop the loop immediately
         r.hit = true;
-        statusEl && (statusEl.textContent = `Сбит ракетой @ ${formatMult(multiplier)}`);
+        falling = true;
+        planeVY = Math.max(planeVY, 800);
+        statusEl && (statusEl.textContent = `Сбит ракетой — падает`);
         cashoutBtn && (cashoutBtn.disabled = true);
-        startBtn && (startBtn.disabled = false);
       }
     }
 
@@ -494,6 +510,5 @@ resizeCanvas();
 generateLevel();
 resetGame();
 // auto-start one round on load for demo
-console.log('game: auto-starting round');
-startRound();
+// no auto-start: require user to press Start button
 /** removed final duplicated block **/
