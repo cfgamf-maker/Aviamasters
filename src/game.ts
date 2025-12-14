@@ -48,6 +48,8 @@ let planeAngle = 0;
 let isUp = false;
 // autopilot threshold (multiplier until which plane tries to climb)
 let ascendUntil = 1.5;
+// failure display timer (timestamp until which 'НЕУДАЧА' is shown)
+let failureUntil: number | null = null;
 
 // Static obstacles and bonuses
 type Bonus = { x: number; y: number; type: number; used?: boolean };
@@ -56,7 +58,8 @@ type MultNode = { x: number; y: number; value: number; hit?: boolean };
 const bonuses: Bonus[] = [];
 const rockets: Rocket[] = [];
 const mults: MultNode[] = [];
-const carrier = { x: 0, y: 0, w: 220, h: 36 };
+type Carrier = { x: number; y: number; w: number; h: number; tried?: boolean };
+const carriers: Carrier[] = [];
 
 // Helpers
 function clamp(v: number, a: number, b: number) { return Math.max(a, Math.min(b, v)); }
@@ -74,15 +77,23 @@ function resizeCanvas() {
 function generateLevel() {
   const cw = canvas.clientWidth;
   const ch = canvas.clientHeight;
-  // carrier on right
-  carrier.x = cw - carrier.w - 40;
-  carrier.y = ch - 40;
-
   // clear lists
   bonuses.length = 0;
   rockets.length = 0;
+  mults.length = 0;
+  carriers.length = 0;
 
-  // bonuses (static) with types: [1, 5, 10, 2, 5]
+  // create multiple carriers spaced across the playable width
+  const carrierCount = Math.max(1, Math.floor(cw / 360));
+  const startX = 200;
+  const span = Math.max(200, cw - 400);
+  const spacingCar = carrierCount > 1 ? span / (carrierCount - 1) : 0;
+  for (let i = 0; i < carrierCount; i++) {
+    const cx = startX + i * spacingCar;
+    carriers.push({ x: cx, y: ch - 40, w: 220, h: 36, tried: false });
+  }
+
+  // bonuses (static)
   const bonusTypes = [1, 5, 10, 2, 5];
   for (let i = 0; i < bonusTypes.length; i++) {
     const bx = 100 + i * 110;
@@ -90,22 +101,28 @@ function generateLevel() {
     bonuses.push({ x: bx, y: by, type: bonusTypes[i] });
   }
 
-  // rockets static
-  for (let i = 0; i < 5; i++) {
-    const rx = 160 + i * 120;
-    const ry = ch - 80 - ((i % 2) * 60);
-    rockets.push({ x: rx, y: ry, r: 10 });
+  // rockets: put several around carriers
+  for (const c of carriers) {
+    const rcount = 2 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < rcount; i++) {
+      const rx = c.x + Math.random() * (c.w + 120) - 40;
+      const ry = c.y - 60 - Math.random() * 80;
+      rockets.push({ x: rx, y: ry, r: 10 });
+    }
   }
 
-  // multiplier nodes (values similar to aviator multipliers, increasing)
-  mults.length = 0;
+  // multiplier nodes (values similar to aviator multipliers), spread across level
   const multValues = [1.05, 1.1, 1.2, 1.4, 1.8, 2.6, 3.5, 5, 8, 12];
-  const startX = 120;
-  const spacing = Math.max(80, (cw - 300) / multValues.length);
-  for (let i = 0; i < multValues.length; i++) {
-    const mx = startX + i * spacing + Math.random() * 12 - 6;
-    const my = ch - 140 - (Math.sin(i) * 20 + (i % 2) * 18);
-    mults.push({ x: mx, y: my, value: multValues[i], hit: false });
+  const totalNodes = Math.max(8, multValues.length * carriers.length);
+  const nodeStart = 120;
+  const nodeEnd = Math.max(cw - 120, nodeStart + 300);
+  const nodeSpacing = (nodeEnd - nodeStart) / Math.max(1, totalNodes - 1);
+  for (let i = 0; i < totalNodes; i++) {
+    const mx = nodeStart + i * nodeSpacing + (Math.random() - 0.5) * 24;
+    const my = ch - 140 - ((i % 2) * 24) + (Math.sin(i) * 12);
+    const idx = Math.min(multValues.length - 1, Math.floor(i / Math.max(1, totalNodes / multValues.length)));
+    const v = multValues[idx] || 1.1;
+    mults.push({ x: mx, y: my, value: v, hit: false });
   }
 }
 
@@ -200,17 +217,23 @@ function loop(now: number) {
     if (planeY < minY) { planeY = minY; planeVY = 0; }
     if (planeY > maxY) {
       if (falling) {
-        // crashed into water after falling
-        crashed = true;
+        // fell into water — show failure and reset after delay
         running = false;
         falling = false;
         multiplier = 1.0;
         multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
-        statusEl && (statusEl.textContent = 'Упал в воду — конец раунда');
+        statusEl && (statusEl.textContent = 'НЕУДАЧА');
         cashoutBtn && (cashoutBtn.disabled = true);
-        startBtn && (startBtn.disabled = false);
+        startBtn && (startBtn.disabled = true);
         planeY = maxY;
         planeVY = 0;
+        if (!failureUntil) {
+          failureUntil = performance.now() + 5000;
+          setTimeout(() => {
+            failureUntil = null;
+            resetGame();
+          }, 5000);
+        }
       } else {
         planeY = maxY; planeVY = 0;
       }
@@ -273,46 +296,46 @@ function loop(now: number) {
       startBtn && (startBtn.disabled = true);
     }
 
-    // wrap plane to left if goes off screen
+    // wrap plane to left if goes off screen and regenerate level for next pass
     const cw = canvas.clientWidth;
     if (planeX > cw + 80) {
       planeX = -40;
+      generateLevel();
     }
 
-    // check passing over carrier to attempt auto-landing
-    if (!landingTried && planeX >= carrier.x - 10 && planeX <= carrier.x + carrier.w + 10) {
-      landingTried = true;
-      // landing chance decreases with higher multiplier (more risk)
-      const baseChance = 0.65; // base chance to land
-      const penalty = clamp((multiplier - 1) / 6, 0, 0.5); // more multiplier reduces chance
-      const chance = clamp(baseChance - penalty, 0.05, 0.95);
-      console.log('game: landing attempt chance=', chance.toFixed(2));
-      if (Math.random() < chance && Math.abs(planeVY) < 500) {
-        // successful landing — plane aligns to deck
-        running = false;
-        const reward = Math.round(multiplier * 30);
-        score += reward;
-        scoreEl && (scoreEl.textContent = String(score));
-        statusEl && (statusEl.textContent = `Приземление успешно! +${reward}`);
-        cashoutBtn && (cashoutBtn.disabled = true);
-        startBtn && (startBtn.disabled = false);
-        // move plane down onto deck
-        planeY = carrier.y - 8;
-        planeVY = 0;
-      } else {
-        // failed — start falling into water, multiplier is lost
-        falling = true;
-        multiplier = 1.0;
-        multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
-        statusEl && (statusEl.textContent = 'Самолёт упал в воду — множитель сброшен');
-        cashoutBtn && (cashoutBtn.disabled = true);
-        startBtn && (startBtn.disabled = true);
-        // visually send plane to water
-        planeVY = Math.max(planeVY, 800);
+    // check passing over each carrier to attempt auto-landing (per-carrier state)
+    for (const c of carriers) {
+      if (c.tried) continue;
+      if (planeX >= c.x - 10 && planeX <= c.x + c.w + 10) {
+        c.tried = true;
+        // landing chance decreases with higher multiplier (more risk)
+        const baseChance = 0.65;
+        const penalty = clamp((multiplier - 1) / 6, 0, 0.5);
+        const chance = clamp(baseChance - penalty, 0.05, 0.95);
+        console.log('game: landing attempt chance=', chance.toFixed(2));
+        if (Math.random() < chance && Math.abs(planeVY) < 500) {
+          // successful landing — plane aligns to deck
+          running = false;
+          const reward = Math.round(multiplier * 30);
+          score += reward;
+          scoreEl && (scoreEl.textContent = String(score));
+          statusEl && (statusEl.textContent = `Приземление успешно! +${reward}`);
+          cashoutBtn && (cashoutBtn.disabled = true);
+          startBtn && (startBtn.disabled = false);
+          planeY = c.y - 8;
+          planeVY = 0;
+        } else {
+          // failed — start falling into water; multiplier is lost
+          falling = true;
+          multiplier = 1.0;
+          multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
+          statusEl && (statusEl.textContent = 'Самолёт упал в воду — множитель сброшен');
+          cashoutBtn && (cashoutBtn.disabled = true);
+          startBtn && (startBtn.disabled = true);
+          planeVY = Math.max(planeVY, 800);
+        }
       }
     }
-  }
-
   draw();
   if (running) requestAnimationFrame(loop);
 }
@@ -447,6 +470,17 @@ function draw() {
     ctx.fillStyle = 'rgba(255,255,255,0.12)';
     ctx.font = '14px sans-serif';
     ctx.fillText('Next: ' + formatMult(next.value), cw - 140, 24);
+  }
+
+  // Failure overlay (НЕУДАЧА)
+  if (failureUntil && performance.now() < failureUntil) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.fillStyle = '#ff2e2e';
+    ctx.font = '48px serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('НЕУДАЧА', cw / 2, ch / 2 + 16);
+    ctx.textAlign = 'start';
   }
 }
 
