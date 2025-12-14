@@ -46,6 +46,8 @@ let planeVY = 0;
 let planeVX = 160; // px/s
 let planeAngle = 0;
 let isUp = false;
+// autopilot threshold (multiplier until which plane tries to climb)
+let ascendUntil = 1.5;
 
 // Static obstacles and bonuses
 type Bonus = { x: number; y: number; type: number; used?: boolean };
@@ -122,6 +124,9 @@ function startRound() {
   if (running) return;
   crashAt = randomCrash();
   console.log('game: startRound crashAt=', crashAt);
+  // set ascend threshold relative to crash multiplier
+  ascendUntil = crashAt * (0.35 + Math.random() * 0.25);
+  console.log('game: ascendUntil=', ascendUntil.toFixed(2));
   running = true;
   crashed = false;
   lastTime = performance.now();
@@ -177,6 +182,13 @@ function loop(now: number) {
     // update multiplier
     multiplier += dt * (0.5 + multiplier * 0.12);
     multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
+
+    // autopilot: determine desired climb/descent based on multiplier and proximity to carrier
+    let desiredUp = multiplier < ascendUntil;
+    // if we're close to carrier, prefer to descend to attempt landing
+    if (planeX >= carrier.x - 80 && planeX <= carrier.x + carrier.w + 80) desiredUp = false;
+    // apply desired autopilot state
+    isUp = desiredUp;
 
     // update plane position
     planeX += planeVX * dt;
@@ -415,14 +427,8 @@ fullscreenBtn?.addEventListener('click', () => {
     document.exitFullscreen().catch(() => {});
   }
 });
-landBtn?.addEventListener('click', () => { doLand(); });
 resetBtn?.addEventListener('click', () => { resetGame(); });
 cashoutBtn?.addEventListener('click', () => { cashout(); });
-
-window.addEventListener('keydown', (e) => { if (e.code === 'Space') isUp = true; });
-window.addEventListener('keyup', (e) => { if (e.code === 'Space') isUp = false; });
-window.addEventListener('mousedown', () => isUp = true);
-window.addEventListener('mouseup', () => isUp = false);
 // toggle fullscreen with 'F'
 window.addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'f') { if (!document.fullscreenElement) canvas.requestFullscreen().catch(()=>{}); else document.exitFullscreen().catch(()=>{}); } });
 
