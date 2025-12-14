@@ -52,8 +52,10 @@ let ascendUntil = 1.5;
 // Static obstacles and bonuses
 type Bonus = { x: number; y: number; type: number; used?: boolean };
 type Rocket = { x: number; y: number; r: number; hit?: boolean };
+type MultNode = { x: number; y: number; value: number; hit?: boolean };
 const bonuses: Bonus[] = [];
 const rockets: Rocket[] = [];
+const mults: MultNode[] = [];
 const carrier = { x: 0, y: 0, w: 220, h: 36 };
 
 // Helpers
@@ -94,6 +96,17 @@ function generateLevel() {
     const ry = ch - 80 - ((i % 2) * 60);
     rockets.push({ x: rx, y: ry, r: 10 });
   }
+
+  // multiplier nodes (values similar to aviator multipliers, increasing)
+  mults.length = 0;
+  const multValues = [1.05, 1.1, 1.2, 1.4, 1.8, 2.6, 3.5, 5, 8, 12];
+  const startX = 120;
+  const spacing = Math.max(80, (cw - 300) / multValues.length);
+  for (let i = 0; i < multValues.length; i++) {
+    const mx = startX + i * spacing + Math.random() * 12 - 6;
+    const my = ch - 140 - (Math.sin(i) * 20 + (i % 2) * 18);
+    mults.push({ x: mx, y: my, value: multValues[i], hit: false });
+  }
 }
 
 function resetGame() {
@@ -114,6 +127,7 @@ function resetGame() {
   generateLevel();
   draw();
 }
+
 
 function randomCrash() {
   // random crash multiplier 2..8
@@ -179,20 +193,21 @@ function loop(now: number) {
   lastTime = now;
 
   if (running) {
-    // update multiplier
-    multiplier += dt * (0.5 + multiplier * 0.12);
-    multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
-
-    // autopilot: determine desired climb/descent based on multiplier and proximity to carrier
-    let desiredUp = multiplier < ascendUntil;
-    // if we're close to carrier, prefer to descend to attempt landing
-    if (planeX >= carrier.x - 80 && planeX <= carrier.x + carrier.w + 80) desiredUp = false;
-    // apply desired autopilot state
+    // autopilot: target the next multiplier node
+    const next = mults.find(m => !m.hit && m.x > planeX);
+    let desiredUp = false;
+    if (next) {
+      // aim slightly above the node to 'hit' it
+      desiredUp = planeY > next.y - 6;
+    } else {
+      // no next node: try to gently descend towards carrier height
+      desiredUp = planeY > (carrier.y - 60);
+    }
     isUp = desiredUp;
 
     // update plane position
     planeX += planeVX * dt;
-    planeVY += isUp ? -850 * dt : 600 * dt; // thrust up or gravity
+    planeVY += isUp ? -420 * dt : 420 * dt; // gentler up/down
     planeY += planeVY * dt;
     planeAngle = clamp(-planeVY / 240, -0.7, 0.7);
 
@@ -228,6 +243,26 @@ function loop(now: number) {
         scoreEl && (scoreEl.textContent = String(score));
         // visual feedback
         statusEl && (statusEl.textContent = `Бонус x${b.type} собран`);
+      }
+    }
+
+    // multiplier nodes collision: only when touching node multiplier changes
+    for (const m of mults) {
+      if (m.hit) continue;
+      const dx = planeX - m.x; const dy = planeY - m.y;
+      if (dx * dx + dy * dy < 18 * 18) {
+        m.hit = true;
+        multiplier = m.value;
+        multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
+        statusEl && (statusEl.textContent = `Множитель достигнут: ${formatMult(multiplier)}`);
+        // if node meets crash threshold — immediate crash
+        if (multiplier >= crashAt) {
+          crashed = true;
+          running = false;
+          statusEl && (statusEl.textContent = `Краш @ ${formatMult(multiplier)}`);
+          cashoutBtn && (cashoutBtn.disabled = true);
+          startBtn && (startBtn.disabled = false);
+        }
       }
     }
 
@@ -330,6 +365,17 @@ function draw() {
     ctx.fillText('x' + b.type, b.x - 10, b.y + 5);
   }
 
+  // draw multiplier nodes
+  for (const m of mults) {
+    ctx.fillStyle = m.hit ? 'rgba(255,255,255,0.06)' : '#ffd166';
+    ctx.beginPath();
+    ctx.arc(m.x, m.y, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(formatMult(m.value), m.x - 14, m.y + 4);
+  }
+
   // draw rockets
   for (const r of rockets) {
     ctx.fillStyle = r.hit ? '#612020' : '#ff4d4d';
@@ -403,6 +449,14 @@ function draw() {
     ctx.fillStyle = '#fff';
     ctx.font = '20px sans-serif';
     ctx.fillText('CRASHED', cw / 2 - 46, ch / 2);
+  }
+
+  // draw HUD: upcoming next multiplier
+  const next = mults.find(m => !m.hit && m.x > planeX);
+  if (next) {
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.font = '14px sans-serif';
+    ctx.fillText('Next: ' + formatMult(next.value), cw - 140, 24);
   }
 }
 
