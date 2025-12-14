@@ -439,4 +439,7 @@ console.log('game: module ready');
 resizeCanvas();
 generateLevel();
 resetGame();
+// auto-start one round on load for demo
+console.log('game: auto-starting round');
+startRound();
 /** removed final duplicated block **/
