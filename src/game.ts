@@ -19,7 +19,6 @@ import './style.css';
 // UI elements
 const startBtn = document.getElementById('start') as HTMLButtonElement | null;
 // land button removed: auto-landing implemented
-const landBtn = null as unknown as HTMLButtonElement | null;
 const fullscreenBtn = document.getElementById('fullscreen') as HTMLButtonElement | null;
 const resetBtn = document.getElementById('reset') as HTMLButtonElement | null;
 const cashoutBtn = document.getElementById('cashout') as HTMLButtonElement | null;
@@ -166,24 +165,7 @@ function cashout() {
   startBtn && (startBtn.disabled = false);
 }
 
-function doLand() {
-  if (!running) return;
-  // plane must be above carrier area and vertical speed slow
-  landingTried = false;
-  console.log('game: startRound crashAt=', crashAt);
-  const puX = planeX;
-  if (puX > carrier.x - 10 && puX < carrier.x + carrier.w + 10 && Math.abs(planeVY) < 200) {
-    running = false;
-    const reward = Math.round(multiplier * 20);
-    score += reward;
-    scoreEl && (scoreEl.textContent = String(score));
-    statusEl && (statusEl.textContent = `Приземление успешно! +${reward}`);
-    startBtn && (startBtn.disabled = false);
-    cashoutBtn && (cashoutBtn.disabled = true);
-  } else {
-    statusEl && (statusEl.textContent = 'Не получилось приземлиться');
-  }
-}
+// manual landing removed (auto-landing implemented)
 
 // landing state for current pass
 let landingTried = false;
@@ -271,24 +253,24 @@ function loop(now: number) {
         multiplier = m.value;
         multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
         statusEl && (statusEl.textContent = `Множитель достигнут: ${formatMult(multiplier)}`);
-        // if node meets crash threshold — immediate crash
+        // if node meets crash threshold — start falling
         if (multiplier >= crashAt) {
-          crashed = true;
-          running = false;
-          statusEl && (statusEl.textContent = `Краш @ ${formatMult(multiplier)}`);
+          falling = true;
+          planeVY = Math.max(planeVY, 800);
+          statusEl && (statusEl.textContent = `Краш @ ${formatMult(multiplier)} — падает`);
           cashoutBtn && (cashoutBtn.disabled = true);
-          startBtn && (startBtn.disabled = false);
+          startBtn && (startBtn.disabled = true);
         }
       }
     }
 
-    // crash by multiplier
+    // crash by multiplier: start falling instead of immediate stop
     if (multiplier >= crashAt) {
-      crashed = true;
-      running = false;
-      statusEl && (statusEl.textContent = `Краш @ ${formatMult(multiplier)}`);
+      falling = true;
+      planeVY = Math.max(planeVY, 800);
+      statusEl && (statusEl.textContent = `Краш @ ${formatMult(multiplier)} — падает`);
       cashoutBtn && (cashoutBtn.disabled = true);
-      startBtn && (startBtn.disabled = false);
+      startBtn && (startBtn.disabled = true);
     }
 
     // wrap plane to left if goes off screen
@@ -318,17 +300,15 @@ function loop(now: number) {
         planeY = carrier.y - 8;
         planeVY = 0;
       } else {
-        // failed — falls into water and multiplier is lost
-        crashed = true;
-        running = false;
+        // failed — start falling into water, multiplier is lost
+        falling = true;
         multiplier = 1.0;
         multiplierEl && (multiplierEl.textContent = formatMult(multiplier));
         statusEl && (statusEl.textContent = 'Самолёт упал в воду — множитель сброшен');
         cashoutBtn && (cashoutBtn.disabled = true);
-        startBtn && (startBtn.disabled = false);
+        startBtn && (startBtn.disabled = true);
         // visually send plane to water
-        planeY = canvas.clientHeight - 12;
-        planeVY = 800;
+        planeVY = Math.max(planeVY, 800);
       }
     }
   }
@@ -459,13 +439,7 @@ function draw() {
   ctx.font = '16px sans-serif';
   ctx.fillText('Multiplier: ' + formatMult(multiplier), 10, 22);
   ctx.fillText('Score: ' + score, 10, 44);
-  if (crashed) {
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(0, 0, cw, ch);
-    ctx.fillStyle = '#fff';
-    ctx.font = '20px sans-serif';
-    ctx.fillText('CRASHED', cw / 2 - 46, ch / 2);
-  }
+  // no global CRASHED overlay — handle end of round via status text and plane position
 
   // draw HUD: upcoming next multiplier
   const next = mults.find(m => !m.hit && m.x > planeX);
